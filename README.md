@@ -41,32 +41,32 @@ python3 server.py --udp 7475         # UDP discovery port
 
 ### Mac / Linux
 ```bash
-chmod +x send
-./send --discover          # find the server, save address
+chmod +x ddrop
+./ddrop --discover          # find the server, save address
 ```
 
 Or copy to PATH:
 ```bash
-cp send /usr/local/bin/send
+cp ddrop /usr/local/bin/ddrop
 ```
 
 ### Windows
 ```bat
-send.bat --discover
+ddrop.bat --discover
 ```
-Or just: `python send --discover`
+Or just: `python ddrop --discover`
 
 ## Client usage
 
 ```bash
-send photo.jpg report.pdf        # upload one or more files (globs work too)
-send *.log                        # upload all .log files
-send -l                           # list files on server
-send -g report.pdf                # download to current directory
-send -d old_file.zip              # delete from server
-send --discover                   # re-scan LAN for server
-send -s 192.168.1.50:7474         # set server address manually
-send --server-info                # show saved server address
+ddrop photo.jpg report.pdf       # upload one or more files (globs work too)
+ddrop *.log                        # upload all .log files
+ddrop -l                           # list files on server
+ddrop -g report.pdf                # download to current directory
+ddrop -d old_file.zip              # delete from server
+ddrop --discover                   # re-scan LAN for server
+ddrop -s 192.168.1.50:7474         # set server address manually
+ddrop --server-info                # show saved server address
 ```
 
 The server address is saved to `~/.draygendrop` after `--discover` or `-s`, so you only need to do it once.
@@ -76,8 +76,8 @@ The server address is saved to `~/.draygendrop` after `--discover` or `-s`, so y
 | File | Purpose |
 |------|---------|
 | `server.py` | DraygenDrop server (run on WSL) |
-| `send` | CLI client (Mac / Linux / WSL) |
-| `send.bat` | CLI client wrapper (Windows cmd) |
+| `ddrop` | CLI client (Mac / Linux / WSL) |
+| `ddrop.bat` | CLI client wrapper (Windows cmd) |
 | `~/.draygendrop` | Saved server address (auto-created) |
 | `~/draygendrop/` | Default drop directory on server |
 

@@ -17,7 +17,7 @@ dependencies = [
 
 [project.scripts]
 ddrop-server = "server:main"
-send         = "send:main"
+ddrop        = "ddrop:main"
 
 [tool.setuptools]
-py-modules = ["server", "send"]
+py-modules = ["server", "ddrop"]

@@ -3,12 +3,12 @@
 DraygenDrop client — upload, download, list, and delete files on a DraygenDrop server.
 
 Usage:
-  send  file [file ...]       Upload one or more files
-  send  -l / --list           List files on server
-  send  -g FILE               Download FILE to current directory
-  send  -d FILE               Delete FILE from server
-  send  --discover            Auto-discover server on LAN and save address
-  send  -s HOST:PORT          Use this server (saved for future use)
+  ddrop file [file ...]       Upload one or more files
+  ddrop -l / --list           List files on server
+  ddrop -g FILE               Download FILE to current directory
+  ddrop -d FILE               Delete FILE from server
+  ddrop --discover            Auto-discover server on LAN and save address
+  ddrop -s HOST:PORT          Use this server (saved for future use)
 """
 
 import argparse
@@ -252,17 +252,17 @@ def _expand_globs(paths: list[str]) -> list[str]:
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        prog="send",
+        prog="ddrop",
         description="DraygenDrop — transfer files to/from your drop server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  send photo.jpg notes.pdf      upload files\n"
-            "  send -l                        list files on server\n"
-            "  send -g report.pdf             download file\n"
-            "  send -d old_file.zip           delete file\n"
-            "  send --discover                find server on local network\n"
-            "  send -s 192.168.1.50:7474      set server manually"
+            "  ddrop photo.jpg notes.pdf      upload files\n"
+            "  ddrop -l                        list files on server\n"
+            "  ddrop -g report.pdf             download file\n"
+            "  ddrop -d old_file.zip           delete file\n"
+            "  ddrop --discover                find server on local network\n"
+            "  ddrop -s 192.168.1.50:7474      set server manually"
         ),
     )
     parser.add_argument("files",      nargs="*", metavar="FILE",     help="Files to upload")
