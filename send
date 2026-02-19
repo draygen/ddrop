@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""
+DraygenDrop — file transfer CLI for your local drop server
+
+Usage:
+  send file1 [file2 ...]     Upload files
+  send -l / --list           List files on server
+  send -g FILE / --get FILE  Download a file (to current dir)
+  send -d FILE / --del FILE  Delete a file from server
+  send -s URL / --server URL Use a different server (overrides default)
+"""
+
+import argparse
+import http.client
+import json
+import mimetypes
+import os
+import sys
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+DEFAULT_SERVER = "192.168.0.172:5000"
+
+
+def parse_server(server: str):
+    if server.startswith("http://"):
+        server = server[7:]
+    if server.startswith("https://"):
+        raise SystemExit("https not supported")
+    host, _, port = server.partition(":")
+    return host, int(port) if port else 80
+
+
+def upload(host, port, paths):
+    boundary = "----PythonSendBoundary7x3k9"
+    for path in paths:
+        p = Path(path)
+        if not p.exists():
+            print(f"  skip: {path} (not found)")
+            continue
+        if not p.is_file():
+            print(f"  skip: {path} (not a file)")
+            continue
+
+        mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        data = p.read_bytes()
+
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{p.name}"\r\n'
+            f"Content-Type: {mime}\r\n\r\n"
+        ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        conn.request(
+            "POST",
+            "/upload",
+            body=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        resp = conn.getresponse()
+        raw = resp.read()
+        conn.close()
+
+        if resp.status == 200:
+            try:
+                info = json.loads(raw)
+                print(f"  uploaded: {info['filename']} ({info['size']})")
+            except Exception:
+                print(f"  uploaded: {p.name}")
+        else:
+            print(f"  error {resp.status}: {p.name} — {raw.decode()[:200]}")
+
+
+def list_files(host, port):
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    conn.request("GET", "/files/uploads")
+    resp = conn.getresponse()
+    files = json.loads(resp.read())
+    conn.close()
+
+    if not files:
+        print("  (no files)")
+        return
+
+    max_name = max(len(f["name"]) for f in files)
+    for f in files:
+        print(f"  {f['name']:<{max_name}}  {f['size']:>10}")
+
+
+def get_file(host, port, filename):
+    encoded = urllib.parse.quote(filename)
+    conn = http.client.HTTPConnection(host, port, timeout=60)
+    conn.request("GET", f"/download/uploads/{encoded}")
+    resp = conn.getresponse()
+
+    if resp.status != 200:
+        resp.read()
+        conn.close()
+        print(f"  error {resp.status}: {filename} not found on server")
+        return
+
+    dest = Path(filename).name
+    with open(dest, "wb") as f:
+        while chunk := resp.read(65536):
+            f.write(chunk)
+    conn.close()
+    size = Path(dest).stat().st_size
+    print(f"  saved: {dest} ({size:,} bytes)")
+
+
+def delete_file(host, port, filename):
+    encoded = urllib.parse.quote(filename)
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    conn.request("DELETE", f"/delete/uploads/{encoded}")
+    resp = conn.getresponse()
+    resp.read()
+    conn.close()
+    if resp.status == 200:
+        print(f"  deleted: {filename}")
+    else:
+        print(f"  error {resp.status}: could not delete {filename}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="send",
+        description="DraygenDrop — transfer files to/from your local drop server",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("files", nargs="*", metavar="FILE", help="Files to upload")
+    parser.add_argument("-l", "--list", action="store_true", help="List files on server")
+    parser.add_argument("-g", "--get", metavar="FILE", help="Download FILE from server")
+    parser.add_argument("-d", "--del", dest="delete", metavar="FILE", help="Delete FILE from server")
+    parser.add_argument("-s", "--server", default=DEFAULT_SERVER, metavar="HOST:PORT", help=f"Server (default: {DEFAULT_SERVER})")
+
+    args = parser.parse_args()
+    host, port = parse_server(args.server)
+
+    if args.list:
+        print(f"Files on {host}:{port}:")
+        list_files(host, port)
+    elif args.get:
+        print(f"Downloading {args.get}...")
+        get_file(host, port, args.get)
+    elif args.delete:
+        delete_file(host, port, args.delete)
+    elif args.files:
+        print(f"Uploading to {host}:{port}...")
+        upload(host, port, args.files)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

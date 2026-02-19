@@ -1,0 +1,29 @@
+#!/bin/bash
+# Quick integration health check: status + errors + connectivity in one shot.
+# Usage: ./check <customer> <integration> [--host HOST] [--port PORT] [--hours N]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+PYTHON_SCRIPT="$SCRIPT_DIR/quick_check.py"
+REQUIREMENTS="$SCRIPT_DIR/requirements.txt"
+
+if ! command -v python3 &> /dev/null; then
+    echo "Error: python3 is required but not found"
+    exit 1
+fi
+
+if [ ! -d "$VENV_DIR" ]; then
+    echo "First run - setting up Python environment..."
+    python3 -m venv "$VENV_DIR"
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to create virtual environment"
+        exit 1
+    fi
+    echo "Installing dependencies..."
+    "$VENV_DIR/bin/pip" install --quiet --upgrade pip
+    "$VENV_DIR/bin/pip" install --quiet -r "$REQUIREMENTS"
+    echo "Setup complete!"
+    echo ""
+fi
+
+exec "$VENV_DIR/bin/python" "$PYTHON_SCRIPT" "$@"
