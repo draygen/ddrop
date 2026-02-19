@@ -3,45 +3,21 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ordr-status"
+name = "draygendrop"
 version = "1.0.0"
-description = "CLI tool to check ORDR customer integration status (read-only diagnostic tool)"
+description = "Simple LAN file transfer — server on WSL, clients on Mac/Windows/Linux"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [
-    {name = "ORDR Support"}
-]
-keywords = ["ordr", "diagnostic", "ssh", "integration"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Environment :: Console",
-    "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: MacOS",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: System :: Monitoring",
-    "Topic :: System :: Systems Administration",
-]
+keywords = ["file-transfer", "lan", "drop", "send"]
 
 dependencies = [
-    "paramiko>=3.0.0",
-    "pyyaml>=6.0",
-    "rich>=13.0.0",
+    "flask>=3.0.0",
 ]
 
 [project.scripts]
-ordr-status = "ordr_status:main"
-send = "send:main"
-
-[project.urls]
-Homepage = "https://github.com/ordr/ordr-status"
+ddrop-server = "server:main"
+send         = "send:main"
 
 [tool.setuptools]
-py-modules = ["ordr_status"]
+py-modules = ["server", "send"]

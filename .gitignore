@@ -1,16 +1,13 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
 .venv/
 *.egg-info/
 dist/
 build/
 
-# Secrets / local config
-~/.ordr/
-*.key
-*.pem
+# Runtime / config
+~/.draygendrop
 
 # OS
 .DS_Store

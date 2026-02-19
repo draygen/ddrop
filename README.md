@@ -1,142 +1,91 @@
-# ORDR Integration Status Tool
+# DraygenDrop
 
-CLI tool to check customer integration status by SSHing through jump servers to ORDR SCE appliances.
+Simple LAN file transfer. Server runs on WSL, clients run on Mac, Windows, or Linux — no cloud, no accounts, no browser required.
 
-> **NOTE: This tool is READ-ONLY.** It only gathers diagnostic data and does not modify any settings on the SCE, containers, or jump server.
-
-## Network Flow
+## How it works
 
 ```
-Mac (Corporate VPN) → remotesupport.ordr.net → customer alias → SCE (cpnadmin)
+Mac / Windows  ──── HTTP ────▶  DraygenDrop Server (WSL)
+                                       │
+                                 ~/draygendrop/
 ```
 
-## Installation
+Clients auto-discover the server via a UDP broadcast — no manual IP config needed after the first run.
 
-### Option 1: Direct Run (Recommended)
-
-Just clone and run - the wrapper script handles everything:
+## Server setup (WSL)
 
 ```bash
-git clone <repo-url> ordr-status
-cd ordr-status
-./ordr-status --init
+pip install flask
+python3 server.py
 ```
 
-The first run automatically creates a Python virtual environment and installs dependencies.
+Output:
+```
+  ┌──────────────────────────────────────────────────┐
+  │              DraygenDrop Server                  │
+  ├──────────────────────────────────────────────────┤
+  │  Address     http://192.168.1.50:7474            │
+  │  Drop dir    /home/user/draygendrop              │
+  │  Discovery   UDP :7475                           │
+  └──────────────────────────────────────────────────┘
+```
 
-### Option 2: Install with pip
+Options:
+```bash
+python3 server.py --port 7474        # HTTP port (default: 7474)
+python3 server.py --dir ~/drops      # storage directory
+python3 server.py --udp 7475         # UDP discovery port
+```
+
+## Client setup
+
+### Mac / Linux
+```bash
+chmod +x send
+./send --discover          # find the server, save address
+```
+
+Or copy to PATH:
+```bash
+cp send /usr/local/bin/send
+```
+
+### Windows
+```bat
+send.bat --discover
+```
+Or just: `python send --discover`
+
+## Client usage
 
 ```bash
-pip install .
-# or from git:
-pip install git+https://github.com/ordr/ordr-status.git
+send photo.jpg report.pdf        # upload one or more files (globs work too)
+send *.log                        # upload all .log files
+send -l                           # list files on server
+send -g report.pdf                # download to current directory
+send -d old_file.zip              # delete from server
+send --discover                   # re-scan LAN for server
+send -s 192.168.1.50:7474         # set server address manually
+send --server-info                # show saved server address
 ```
 
-### Option 3: Install with pipx (isolated)
-
-```bash
-pipx install .
-```
-
-## Configuration
-
-Initialize the config file:
-
-```bash
-ordr-status --init
-```
-
-Edit `~/.ordr/config.yaml` with your SSH settings:
-
-```yaml
-ssh:
-  user: your_username        # Your remotesupport username
-  key: ~/.ssh/rVPN.key       # Path to your SSH private key
-  jump_host: remotesupport.ordr.net
-```
-
-## Usage
-
-```bash
-# List available customer aliases (fetches from jump server)
-ordr-status --list
-
-# Quick health check - container status + integration summary
-ordr-status rtc-prod
-
-# Check specific integration
-ordr-status rtc-prod --integration crowdstrike
-
-# Show integration errors from logs
-ordr-status rtc-prod --errors
-
-# Full diagnostic (all containers, all integrations, recent logs)
-ordr-status rtc-prod --full
-
-# Interactive mode - connect and run commands manually
-ordr-status rtc-prod --shell
-```
-
-## Sample Output
-
-```
-$ ordr-status rtc-prod
-
-ORDR Status: rtc-prod
-═══════════════════════════════════════════════════════════
-
-CONTAINERS                           STATUS
-─────────────────────────────────────────────────────────
-DBA                                  ✓ RUNNING
-ILC                                  ✓ RUNNING
-POC                                  ✓ RUNNING
-KAFKA                                ✓ RUNNING
-NGINX                                ✓ RUNNING
-ML                                   ○ STOPPED (expected)
-
-INTEGRATIONS (POC Container)         STATUS        LAST UPDATE
-─────────────────────────────────────────────────────────
-crowdstrikeapp                       ✓ active      2h ago
-iseapp                               ✓ active      1h ago
-merakiapp                            ✗ failed      3d ago
-tenableapi                           ✓ active      30m ago
-
-RECENT ERRORS (last 24h)
-─────────────────────────────────────────────────────────
-[merakiapp] API rate limit exceeded - 429 response
-```
-
-## What Commands Are Run on SCE
-
-This tool executes the following **read-only** commands:
-
-```bash
-# Container status (read-only)
-sudo lxc list
-
-# Service status checks (read-only)
-sudo lxc exec POC -- systemctl status <service> --no-pager
-
-# Log inspection (read-only)
-sudo lxc exec POC -- tail -100 /var/log/<service>/<service>.log | grep -i error
-
-# List running services (read-only)
-sudo lxc exec POC -- systemctl list-units --type=service --state=running
-```
-
-**No write operations, no configuration changes, no service restarts.**
-
-## Dependencies
-
-- Python 3.8+
-- paramiko (SSH connections)
-- pyyaml (config file)
-- rich (terminal formatting)
+The server address is saved to `~/.draygendrop` after `--discover` or `-s`, so you only need to do it once.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `ordr-status` | Shell wrapper (auto-setup) |
-| `ordr_status.py` | Main Python tool |
-| `~/.ordr/config.yaml` | User configuration |
+| `server.py` | DraygenDrop server (run on WSL) |
+| `send` | CLI client (Mac / Linux / WSL) |
+| `send.bat` | CLI client wrapper (Windows cmd) |
+| `~/.draygendrop` | Saved server address (auto-created) |
+| `~/draygendrop/` | Default drop directory on server |
+
+## Network ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 7474 | TCP/HTTP | File transfer API |
+| 7475 | UDP | LAN auto-discovery |
+
+> **Windows firewall**: if clients can't reach the server, add an inbound rule for TCP 7474 and UDP 7475 on the Windows host, or run the server with `--port` on a port that's already allowed.

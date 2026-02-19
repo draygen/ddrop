@@ -1,40 +1,120 @@
 #!/usr/bin/env python3
 """
-DraygenDrop — file transfer CLI for your local drop server
+DraygenDrop client — upload, download, list, and delete files on a DraygenDrop server.
 
 Usage:
-  send file1 [file2 ...]     Upload files
-  send -l / --list           List files on server
-  send -g FILE / --get FILE  Download a file (to current dir)
-  send -d FILE / --del FILE  Delete a file from server
-  send -s URL / --server URL Use a different server (overrides default)
+  send  file [file ...]       Upload one or more files
+  send  -l / --list           List files on server
+  send  -g FILE               Download FILE to current directory
+  send  -d FILE               Delete FILE from server
+  send  --discover            Auto-discover server on LAN and save address
+  send  -s HOST:PORT          Use this server (saved for future use)
 """
 
 import argparse
+import glob as _glob
 import http.client
 import json
 import mimetypes
-import os
+import socket
 import sys
+import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
-DEFAULT_SERVER = "192.168.0.172:5000"
+# ── config ────────────────────────────────────────────────────────────────────
+CONFIG_FILE   = Path.home() / ".draygendrop"
+DEFAULT_PORT  = 7474
+DISCOVERY_UDP = 7475
 
 
-def parse_server(server: str):
-    if server.startswith("http://"):
-        server = server[7:]
-    if server.startswith("https://"):
-        raise SystemExit("https not supported")
-    host, _, port = server.partition(":")
-    return host, int(port) if port else 80
+def _load_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except Exception:
+            pass
+    return {}
 
 
-def upload(host, port, paths):
-    boundary = "----PythonSendBoundary7x3k9"
-    for path in paths:
+def _save_config(data: dict):
+    cfg = _load_config()
+    cfg.update(data)
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+
+
+def _resolve_server(explicit: str | None) -> tuple[str, int]:
+    """Return (host, port) from explicit arg, saved config, or raise."""
+    raw = explicit or _load_config().get("server")
+    if not raw:
+        raise SystemExit(
+            "No server configured.\n"
+            "  Run:  send --discover        (find server automatically)\n"
+            "  Or:   send -s HOST:PORT      (set server manually)"
+        )
+    if raw.startswith("http://"):
+        raw = raw[7:]
+    host, _, port = raw.partition(":")
+    return host, int(port) if port else DEFAULT_PORT
+
+
+# ── display ───────────────────────────────────────────────────────────────────
+def _fmt_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+        n //= 1024
+
+
+def _progress(label: str, done: int, total: int, elapsed: float):
+    if total <= 0:
+        return
+    pct = min(done / total, 1.0)
+    width = 20
+    filled = int(width * pct)
+    bar = "█" * filled + "░" * (width - filled)
+    speed = done / max(elapsed, 0.001)
+    tag = f"{_fmt_size(done)}/{_fmt_size(total)}"
+    sys.stderr.write(f"\r  {label[:36]:<36} [{bar}] {pct*100:3.0f}%  {_fmt_size(speed)}/s  ")
+    sys.stderr.flush()
+    if done >= total:
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
+# ── upload ────────────────────────────────────────────────────────────────────
+class _ProgressReader:
+    """Wrap multipart body bytes to report upload progress via stderr."""
+
+    def __init__(self, data: bytes, label: str):
+        self._data  = data
+        self._pos   = 0
+        self._total = len(data)
+        self._label = label
+        self._start = time.monotonic()
+
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            chunk = self._data[self._pos:]
+            self._pos = self._total
+        else:
+            chunk = self._data[self._pos: self._pos + size]
+            self._pos += len(chunk)
+        _progress(self._label, self._pos, self._total, time.monotonic() - self._start)
+        return chunk
+
+    def __len__(self) -> int:
+        return self._total
+
+
+def upload(host: str, port: int, paths: list[str]):
+    boundary = "----DraygenDropBoundary8z2m1"
+    expanded = _expand_globs(paths)
+    if not expanded:
+        print("  No files matched.")
+        return
+
+    for path in expanded:
         p = Path(path)
         if not p.exists():
             print(f"  skip: {path} (not found)")
@@ -44,23 +124,22 @@ def upload(host, port, paths):
             continue
 
         mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-        data = p.read_bytes()
-
-        body = (
+        header = (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="file"; filename="{p.name}"\r\n'
             f"Content-Type: {mime}\r\n\r\n"
-        ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        ).encode()
+        footer = f"\r\n--{boundary}--\r\n".encode()
+        body_bytes = header + p.read_bytes() + footer
+        body = _ProgressReader(body_bytes, p.name)
 
-        conn = http.client.HTTPConnection(host, port, timeout=30)
+        conn = http.client.HTTPConnection(host, port, timeout=120)
         conn.request(
-            "POST",
-            "/upload",
-            body=body,
+            "POST", "/upload", body=body,
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )
         resp = conn.getresponse()
-        raw = resp.read()
+        raw  = resp.read()
         conn.close()
 
         if resp.status == 200:
@@ -73,9 +152,10 @@ def upload(host, port, paths):
             print(f"  error {resp.status}: {p.name} — {raw.decode()[:200]}")
 
 
-def list_files(host, port):
+# ── list ──────────────────────────────────────────────────────────────────────
+def list_files(host: str, port: int):
     conn = http.client.HTTPConnection(host, port, timeout=10)
-    conn.request("GET", "/files/uploads")
+    conn.request("GET", "/files")
     resp = conn.getresponse()
     files = json.loads(resp.read())
     conn.close()
@@ -84,15 +164,17 @@ def list_files(host, port):
         print("  (no files)")
         return
 
-    max_name = max(len(f["name"]) for f in files)
+    col = max(len(f["name"]) for f in files)
     for f in files:
-        print(f"  {f['name']:<{max_name}}  {f['size']:>10}")
+        print(f"  {f['name']:<{col}}  {f['size']:>10}")
+    print(f"\n  {len(files)} file(s)")
 
 
-def get_file(host, port, filename):
+# ── download ──────────────────────────────────────────────────────────────────
+def get_file(host: str, port: int, filename: str):
     encoded = urllib.parse.quote(filename)
-    conn = http.client.HTTPConnection(host, port, timeout=60)
-    conn.request("GET", f"/download/uploads/{encoded}")
+    conn = http.client.HTTPConnection(host, port, timeout=120)
+    conn.request("GET", f"/download/{encoded}")
     resp = conn.getresponse()
 
     if resp.status != 200:
@@ -101,19 +183,28 @@ def get_file(host, port, filename):
         print(f"  error {resp.status}: {filename} not found on server")
         return
 
-    dest = Path(filename).name
+    total   = int(resp.getheader("Content-Length", 0))
+    dest    = Path(filename).name
+    start   = time.monotonic()
+    received = 0
+
     with open(dest, "wb") as f:
         while chunk := resp.read(65536):
             f.write(chunk)
+            received += len(chunk)
+            if total:
+                _progress(dest, received, total, time.monotonic() - start)
+
     conn.close()
-    size = Path(dest).stat().st_size
-    print(f"  saved: {dest} ({size:,} bytes)")
+    if not total:
+        print(f"  saved: {dest} ({_fmt_size(received)})")
 
 
-def delete_file(host, port, filename):
+# ── delete ────────────────────────────────────────────────────────────────────
+def delete_file(host: str, port: int, filename: str):
     encoded = urllib.parse.quote(filename)
     conn = http.client.HTTPConnection(host, port, timeout=10)
-    conn.request("DELETE", f"/delete/uploads/{encoded}")
+    conn.request("DELETE", f"/file/{encoded}")
     resp = conn.getresponse()
     resp.read()
     conn.close()
@@ -123,31 +214,104 @@ def delete_file(host, port, filename):
         print(f"  error {resp.status}: could not delete {filename}")
 
 
+# ── discovery ─────────────────────────────────────────────────────────────────
+def discover(timeout: float = 3.0) -> str | None:
+    """Broadcast on LAN and return 'host:port' of first DraygenDrop server found."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(b"DRAYGENDROP_DISCOVER", ("255.255.255.255", DISCOVERY_UDP))
+        data, _ = sock.recvfrom(256)
+        token = data.decode()
+        if token.startswith("DRAYGENDROP:"):
+            _, ip, port = token.split(":")
+            return f"{ip}:{port}"
+    except socket.timeout:
+        pass
+    except Exception:
+        pass
+    finally:
+        sock.close()
+    return None
+
+
+# ── windows glob expansion ────────────────────────────────────────────────────
+def _expand_globs(paths: list[str]) -> list[str]:
+    """Expand glob patterns — needed on Windows where the shell doesn't do it."""
+    out = []
+    for p in paths:
+        if any(c in p for c in "*?["):
+            expanded = _glob.glob(p)
+            out.extend(expanded if expanded else [p])
+        else:
+            out.append(p)
+    return out
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
         prog="send",
-        description="DraygenDrop — transfer files to/from your local drop server",
+        description="DraygenDrop — transfer files to/from your drop server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  send photo.jpg notes.pdf      upload files\n"
+            "  send -l                        list files on server\n"
+            "  send -g report.pdf             download file\n"
+            "  send -d old_file.zip           delete file\n"
+            "  send --discover                find server on local network\n"
+            "  send -s 192.168.1.50:7474      set server manually"
+        ),
     )
-    parser.add_argument("files", nargs="*", metavar="FILE", help="Files to upload")
-    parser.add_argument("-l", "--list", action="store_true", help="List files on server")
-    parser.add_argument("-g", "--get", metavar="FILE", help="Download FILE from server")
-    parser.add_argument("-d", "--del", dest="delete", metavar="FILE", help="Delete FILE from server")
-    parser.add_argument("-s", "--server", default=DEFAULT_SERVER, metavar="HOST:PORT", help=f"Server (default: {DEFAULT_SERVER})")
+    parser.add_argument("files",      nargs="*", metavar="FILE",     help="Files to upload")
+    parser.add_argument("-l", "--list",           action="store_true",help="List files on server")
+    parser.add_argument("-g", "--get",            metavar="FILE",     help="Download FILE from server")
+    parser.add_argument("-d", "--del",            dest="delete", metavar="FILE", help="Delete FILE from server")
+    parser.add_argument("-s", "--server",         metavar="HOST:PORT",help="Server address (saved for future use)")
+    parser.add_argument("--discover",             action="store_true",help="Auto-discover server on local network")
+    parser.add_argument("--server-info",          action="store_true",help="Show saved server address")
 
     args = parser.parse_args()
-    host, port = parse_server(args.server)
 
+    # ── --discover ─────────────────────────────────────────────────────────────
+    if args.discover:
+        print("Scanning local network...")
+        result = discover()
+        if result:
+            _save_config({"server": result})
+            print(f"  Found: {result}  (saved)")
+        else:
+            print("  No DraygenDrop server found on local network.")
+            print("  Start the server with:  python3 server.py")
+        return
+
+    # ── --server-info ──────────────────────────────────────────────────────────
+    if args.server_info:
+        cfg = _load_config()
+        saved = cfg.get("server", "(none)")
+        print(f"  Saved server: {saved}")
+        print(f"  Config file:  {CONFIG_FILE}")
+        return
+
+    # ── save explicit server ───────────────────────────────────────────────────
+    if args.server:
+        _save_config({"server": args.server})
+        print(f"  Server saved: {args.server}")
+        if not (args.list or args.get or args.delete or args.files):
+            return
+
+    host, port = _resolve_server(args.server)
+
+    # ── dispatch ───────────────────────────────────────────────────────────────
     if args.list:
-        print(f"Files on {host}:{port}:")
         list_files(host, port)
     elif args.get:
-        print(f"Downloading {args.get}...")
         get_file(host, port, args.get)
     elif args.delete:
         delete_file(host, port, args.delete)
     elif args.files:
-        print(f"Uploading to {host}:{port}...")
         upload(host, port, args.files)
     else:
         parser.print_help()
